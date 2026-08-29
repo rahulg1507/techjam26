@@ -25,6 +25,7 @@ DEFAULT_CLASSIFIER_PATH = "outputs/classifier.pkl"
 DEFAULT_REPORT_PATH = "reports/robustness_table.md"
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_RANDOM_SEED = 42
+DEFAULT_USE_FREQUENCY_FEATURES = True
 METRIC_ZERO_DIVISION_VALUE = 0
 
 
@@ -83,21 +84,24 @@ def extract_embeddings(
     images: list[Image.Image],
     feature_extractor: ClipFeatureExtractor,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
 ) -> np.ndarray:
-    """Extract fused CLIP and frequency embeddings in efficient batches."""
+    """Extract CLIP embeddings, optionally fused with frequency features."""
     embedding_batches = []
     for start_index in range(0, len(images), batch_size):
         image_batch = images[start_index : start_index + batch_size]
         clip_embeddings = feature_extractor.extract_batch(image_batch)
-        frequency_feature_arrays = [
-            extract_frequency_features(image) for image in image_batch
-        ]
-        frequency_embeddings = torch.from_numpy(
-            np.stack(frequency_feature_arrays)
-        ).to(dtype=clip_embeddings.dtype)
-        embedding_batches.append(
-            torch.cat((clip_embeddings, frequency_embeddings), dim=1)
-        )
+        if use_frequency_features:
+            frequency_feature_arrays = [
+                extract_frequency_features(image) for image in image_batch
+            ]
+            frequency_embeddings = torch.from_numpy(
+                np.stack(frequency_feature_arrays)
+            ).to(dtype=clip_embeddings.dtype)
+            clip_embeddings = torch.cat(
+                (clip_embeddings, frequency_embeddings), dim=1
+            )
+        embedding_batches.append(clip_embeddings)
     return torch.cat(embedding_batches, dim=0).numpy()
 
 
@@ -128,9 +132,14 @@ def evaluate_condition(
     labels: list[int],
     classifier,
     feature_extractor: ClipFeatureExtractor,
+    use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
 ) -> dict[str, float]:
     """Extract features and score one clean or transformed image condition."""
-    embeddings = extract_embeddings(condition_images, feature_extractor)
+    embeddings = extract_embeddings(
+        condition_images,
+        feature_extractor,
+        use_frequency_features=use_frequency_features,
+    )
     predictions = classifier.predict(embeddings)
     return calculate_metrics(labels, predictions)
 
@@ -175,6 +184,7 @@ def evaluate_dataset(
     classifier_path: str = DEFAULT_CLASSIFIER_PATH,
     report_path: str = DEFAULT_REPORT_PATH,
     max_per_class: int | None = None,
+    use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
 ) -> dict[str, dict[str, float]]:
     """Evaluate clean images and every registered transform, then save the report."""
     images, labels = load_labeled_images(data_directory, max_per_class)
@@ -182,7 +192,13 @@ def evaluate_dataset(
     feature_extractor = ClipFeatureExtractor()
     metrics_by_condition = {}
 
-    clean_metrics = evaluate_condition(images, labels, classifier, feature_extractor)
+    clean_metrics = evaluate_condition(
+        images,
+        labels,
+        classifier,
+        feature_extractor,
+        use_frequency_features=use_frequency_features,
+    )
     metrics_by_condition["Clean"] = clean_metrics
     print_metrics("Clean", clean_metrics)
 
@@ -191,7 +207,11 @@ def evaluate_dataset(
     ):
         transformed_images = [transform(image) for image in images]
         transform_metrics = evaluate_condition(
-            transformed_images, labels, classifier, feature_extractor
+            transformed_images,
+            labels,
+            classifier,
+            feature_extractor,
+            use_frequency_features=use_frequency_features,
         )
         metrics_by_condition[transform_name] = transform_metrics
         print_metrics(transform_name, transform_metrics)
@@ -221,6 +241,12 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Maximum number of images to sample from each class",
     )
+    parser.add_argument(
+        "--use_frequency_features",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_USE_FREQUENCY_FEATURES,
+        help="Include frequency-domain features with CLIP embeddings",
+    )
     return parser.parse_args()
 
 
@@ -232,6 +258,7 @@ def main() -> None:
         classifier_path=arguments.classifier,
         report_path=arguments.report_path,
         max_per_class=arguments.max_per_class,
+        use_frequency_features=arguments.use_frequency_features,
     )
 
 

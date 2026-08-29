@@ -28,6 +28,7 @@ DEFAULT_AUGMENTATION_PROBABILITY = 0.5
 DEFAULT_VALIDATION_SPLIT = 0.2
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_RANDOM_SEED = 42
+DEFAULT_USE_FREQUENCY_FEATURES = True
 CLASSIFIER_MAXIMUM_ITERATIONS = 1000
 METRIC_ZERO_DIVISION_VALUE = 0
 PROBABILITY_MINIMUM = 0.0
@@ -100,12 +101,13 @@ def extract_embeddings(
     images: list[Image.Image],
     feature_extractor: ClipFeatureExtractor,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
 ) -> object:
     """Extract fused CLIP and frequency embeddings in efficient batches.
 
-    CLIP inference remains batched for speed while each image receives a
-    frequency-domain descriptor that captures artifacts absent from semantic
-    features.
+    CLIP inference remains batched for speed. When enabled, each image also
+    receives a frequency-domain descriptor that captures artifacts absent from
+    semantic features.
     """
     embedding_batches = []
     for start_index in tqdm(
@@ -113,15 +115,17 @@ def extract_embeddings(
     ):
         image_batch = images[start_index : start_index + batch_size]
         clip_embeddings = feature_extractor.extract_batch(image_batch)
-        frequency_feature_arrays = [
-            extract_frequency_features(image) for image in image_batch
-        ]
-        frequency_embeddings = torch.from_numpy(
-            np.stack(frequency_feature_arrays)
-        ).to(dtype=clip_embeddings.dtype)
-        embedding_batches.append(
-            torch.cat((clip_embeddings, frequency_embeddings), dim=1)
-        )
+        if use_frequency_features:
+            frequency_feature_arrays = [
+                extract_frequency_features(image) for image in image_batch
+            ]
+            frequency_embeddings = torch.from_numpy(
+                np.stack(frequency_feature_arrays)
+            ).to(dtype=clip_embeddings.dtype)
+            clip_embeddings = torch.cat(
+                (clip_embeddings, frequency_embeddings), dim=1
+            )
+        embedding_batches.append(clip_embeddings)
 
     return torch.cat(embedding_batches, dim=0).numpy()
 
@@ -173,6 +177,7 @@ def train_classifier(
     augmentation_probability: float = DEFAULT_AUGMENTATION_PROBABILITY,
     validation_split: float = DEFAULT_VALIDATION_SPLIT,
     max_per_class: int | None = None,
+    use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
 ) -> LogisticRegression:
     """Train, evaluate, and save a logistic regression image classifier."""
     if not PROBABILITY_MINIMUM <= augmentation_probability <= PROBABILITY_MAXIMUM:
@@ -194,8 +199,12 @@ def train_classifier(
         load_images(training_paths), augmentation_probability
     )
     validation_images = load_images(validation_paths)
-    training_embeddings = extract_embeddings(training_images, feature_extractor)
-    validation_embeddings = extract_embeddings(validation_images, feature_extractor)
+    training_embeddings = extract_embeddings(
+        training_images, feature_extractor, use_frequency_features=use_frequency_features
+    )
+    validation_embeddings = extract_embeddings(
+        validation_images, feature_extractor, use_frequency_features=use_frequency_features
+    )
 
     classifier = LogisticRegression(max_iter=CLASSIFIER_MAXIMUM_ITERATIONS)
     classifier.fit(training_embeddings, training_labels)
@@ -237,6 +246,12 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Maximum number of images to sample from each class",
     )
+    parser.add_argument(
+        "--use_frequency_features",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_USE_FREQUENCY_FEATURES,
+        help="Include frequency-domain features with CLIP embeddings",
+    )
     return parser.parse_args()
 
 
@@ -249,6 +264,7 @@ def main() -> None:
         augmentation_probability=arguments.augment_prob,
         validation_split=arguments.val_split,
         max_per_class=arguments.max_per_class,
+        use_frequency_features=arguments.use_frequency_features,
     )
 
 
