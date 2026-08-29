@@ -10,6 +10,7 @@ from PIL import Image
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 from features import ClipFeatureExtractor
 from transforms import random_augment
@@ -31,11 +32,17 @@ PROBABILITY_MINIMUM = 0.0
 PROBABILITY_MAXIMUM = 1.0
 
 
-def collect_image_paths(data_directory: str) -> tuple[list[Path], list[int]]:
+def collect_image_paths(
+    data_directory: str, max_per_class: int | None = None
+) -> tuple[list[Path], list[int]]:
     """Collect labeled paths from REAL and FAKE directories."""
+    if max_per_class is not None and max_per_class < 1:
+        raise ValueError("max_per_class must be at least 1")
+
     root = Path(data_directory)
     image_paths = []
     labels = []
+    sampling_generator = random.Random(DEFAULT_RANDOM_SEED)
 
     for directory_name, label in (
         (REAL_DIRECTORY_NAME, REAL_LABEL),
@@ -45,10 +52,19 @@ def collect_image_paths(data_directory: str) -> tuple[list[Path], list[int]]:
         if not class_directory.is_dir():
             raise FileNotFoundError(f"Missing class directory: {class_directory}")
 
-        for image_path in sorted(class_directory.rglob("*")):
-            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS:
-                image_paths.append(image_path)
-                labels.append(label)
+        class_image_paths = [
+            image_path
+            for image_path in sorted(class_directory.rglob("*"))
+            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        if max_per_class is not None and len(class_image_paths) > max_per_class:
+            class_image_paths = sorted(
+                sampling_generator.sample(class_image_paths, max_per_class)
+            )
+
+        for image_path in class_image_paths:
+            image_paths.append(image_path)
+            labels.append(label)
 
     if not image_paths:
         raise ValueError(f"No supported images found in {root}")
@@ -59,7 +75,7 @@ def collect_image_paths(data_directory: str) -> tuple[list[Path], list[int]]:
 def load_images(image_paths: list[Path]) -> list[Image.Image]:
     """Load images into memory so files are closed before feature extraction."""
     images = []
-    for image_path in image_paths:
+    for image_path in tqdm(image_paths, desc="Loading images", unit="image"):
         with Image.open(image_path) as image:
             images.append(image.convert("RGB").copy())
     return images
@@ -85,7 +101,9 @@ def extract_embeddings(
 ) -> object:
     """Extract CLIP embeddings in batches to reduce model-call overhead."""
     embedding_batches = []
-    for start_index in range(0, len(images), batch_size):
+    for start_index in tqdm(
+        range(0, len(images), batch_size), desc="Extracting embeddings", unit="batch"
+    ):
         image_batch = images[start_index : start_index + batch_size]
         embedding_batches.append(feature_extractor.extract_batch(image_batch))
 
@@ -138,6 +156,7 @@ def train_classifier(
     output_path: str = DEFAULT_OUTPUT_PATH,
     augmentation_probability: float = DEFAULT_AUGMENTATION_PROBABILITY,
     validation_split: float = DEFAULT_VALIDATION_SPLIT,
+    max_per_class: int | None = None,
 ) -> LogisticRegression:
     """Train, evaluate, and save a logistic regression image classifier."""
     if not PROBABILITY_MINIMUM <= augmentation_probability <= PROBABILITY_MAXIMUM:
@@ -145,7 +164,7 @@ def train_classifier(
     if not PROBABILITY_MINIMUM < validation_split < PROBABILITY_MAXIMUM:
         raise ValueError("validation split must be between 0 and 1")
 
-    image_paths, labels = collect_image_paths(data_directory)
+    image_paths, labels = collect_image_paths(data_directory, max_per_class)
     training_paths, validation_paths, training_labels, validation_labels = train_test_split(
         image_paths,
         labels,
@@ -196,6 +215,12 @@ def parse_arguments() -> argparse.Namespace:
         default=DEFAULT_VALIDATION_SPLIT,
         help="Fraction of images reserved for validation",
     )
+    parser.add_argument(
+        "--max_per_class",
+        type=int,
+        default=None,
+        help="Maximum number of images to sample from each class",
+    )
     return parser.parse_args()
 
 
@@ -207,6 +232,7 @@ def main() -> None:
         output_path=arguments.output,
         augmentation_probability=arguments.augment_prob,
         validation_split=arguments.val_split,
+        max_per_class=arguments.max_per_class,
     )
 
 
