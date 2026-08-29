@@ -2,14 +2,17 @@
 
 import argparse
 import pickle
+import random
 from pathlib import Path
 
 import numpy as np
 import torch
 from PIL import Image
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from tqdm import tqdm
 
 from features import ClipFeatureExtractor
+from frequency_features import extract_frequency_features
 from transforms import TRANSFORMS
 
 
@@ -21,14 +24,21 @@ FAKE_LABEL = 1
 DEFAULT_CLASSIFIER_PATH = "outputs/classifier.pkl"
 DEFAULT_REPORT_PATH = "reports/robustness_table.md"
 DEFAULT_BATCH_SIZE = 32
+DEFAULT_RANDOM_SEED = 42
 METRIC_ZERO_DIVISION_VALUE = 0
 
 
-def load_labeled_images(data_directory: str) -> tuple[list[Image.Image], list[int]]:
+def load_labeled_images(
+    data_directory: str, max_per_class: int | None = None
+) -> tuple[list[Image.Image], list[int]]:
     """Load RGB images and labels from REAL and FAKE subdirectories."""
+    if max_per_class is not None and max_per_class < 1:
+        raise ValueError("max_per_class must be at least 1")
+
     root = Path(data_directory)
     images = []
     labels = []
+    sampling_generator = random.Random(DEFAULT_RANDOM_SEED)
 
     for directory_name, label in (
         (REAL_DIRECTORY_NAME, REAL_LABEL),
@@ -38,12 +48,24 @@ def load_labeled_images(data_directory: str) -> tuple[list[Image.Image], list[in
         if not class_directory.is_dir():
             raise FileNotFoundError(f"Missing class directory: {class_directory}")
 
-        image_paths = sorted(class_directory.rglob("*"))
-        for image_path in image_paths:
-            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS:
-                with Image.open(image_path) as image:
-                    images.append(image.convert("RGB").copy())
-                labels.append(label)
+        class_image_paths = [
+            image_path
+            for image_path in sorted(class_directory.rglob("*"))
+            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        if max_per_class is not None and len(class_image_paths) > max_per_class:
+            class_image_paths = sorted(
+                sampling_generator.sample(class_image_paths, max_per_class)
+            )
+
+        for image_path in tqdm(
+            class_image_paths,
+            desc=f"Loading {directory_name} images",
+            unit="image",
+        ):
+            with Image.open(image_path) as image:
+                images.append(image.convert("RGB").copy())
+            labels.append(label)
 
     if not images:
         raise ValueError(f"No supported images found in {root}")
@@ -62,11 +84,20 @@ def extract_embeddings(
     feature_extractor: ClipFeatureExtractor,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> np.ndarray:
-    """Extract embeddings in batches so each evaluation condition stays efficient."""
+    """Extract fused CLIP and frequency embeddings in efficient batches."""
     embedding_batches = []
     for start_index in range(0, len(images), batch_size):
         image_batch = images[start_index : start_index + batch_size]
-        embedding_batches.append(feature_extractor.extract_batch(image_batch))
+        clip_embeddings = feature_extractor.extract_batch(image_batch)
+        frequency_feature_arrays = [
+            extract_frequency_features(image) for image in image_batch
+        ]
+        frequency_embeddings = torch.from_numpy(
+            np.stack(frequency_feature_arrays)
+        ).to(dtype=clip_embeddings.dtype)
+        embedding_batches.append(
+            torch.cat((clip_embeddings, frequency_embeddings), dim=1)
+        )
     return torch.cat(embedding_batches, dim=0).numpy()
 
 
@@ -143,9 +174,10 @@ def evaluate_dataset(
     data_directory: str,
     classifier_path: str = DEFAULT_CLASSIFIER_PATH,
     report_path: str = DEFAULT_REPORT_PATH,
+    max_per_class: int | None = None,
 ) -> dict[str, dict[str, float]]:
     """Evaluate clean images and every registered transform, then save the report."""
-    images, labels = load_labeled_images(data_directory)
+    images, labels = load_labeled_images(data_directory, max_per_class)
     classifier = load_classifier(classifier_path)
     feature_extractor = ClipFeatureExtractor()
     metrics_by_condition = {}
@@ -154,7 +186,9 @@ def evaluate_dataset(
     metrics_by_condition["Clean"] = clean_metrics
     print_metrics("Clean", clean_metrics)
 
-    for transform_name, transform in TRANSFORMS.items():
+    for transform_name, transform in tqdm(
+        TRANSFORMS.items(), desc="Evaluating transforms", unit="transform"
+    ):
         transformed_images = [transform(image) for image in images]
         transform_metrics = evaluate_condition(
             transformed_images, labels, classifier, feature_extractor
@@ -181,6 +215,12 @@ def parse_arguments() -> argparse.Namespace:
         default=DEFAULT_REPORT_PATH,
         help="Path to the markdown robustness table",
     )
+    parser.add_argument(
+        "--max_per_class",
+        type=int,
+        default=None,
+        help="Maximum number of images to sample from each class",
+    )
     return parser.parse_args()
 
 
@@ -191,6 +231,7 @@ def main() -> None:
         data_directory=arguments.data_dir,
         classifier_path=arguments.classifier,
         report_path=arguments.report_path,
+        max_per_class=arguments.max_per_class,
     )
 
 
