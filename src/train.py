@@ -1,10 +1,11 @@
-"""Train a lightweight classifier on frozen CLIP image embeddings."""
+"""Train a lightweight classifier on fused CLIP and frequency features."""
 
 import argparse
 import pickle
 import random
 from pathlib import Path
 
+import numpy as np
 import torch
 from PIL import Image
 from sklearn.linear_model import LogisticRegression
@@ -13,6 +14,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 from features import ClipFeatureExtractor
+from frequency_features import extract_frequency_features
 from transforms import random_augment
 
 
@@ -99,13 +101,27 @@ def extract_embeddings(
     feature_extractor: ClipFeatureExtractor,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> object:
-    """Extract CLIP embeddings in batches to reduce model-call overhead."""
+    """Extract fused CLIP and frequency embeddings in efficient batches.
+
+    CLIP inference remains batched for speed while each image receives a
+    frequency-domain descriptor that captures artifacts absent from semantic
+    features.
+    """
     embedding_batches = []
     for start_index in tqdm(
         range(0, len(images), batch_size), desc="Extracting embeddings", unit="batch"
     ):
         image_batch = images[start_index : start_index + batch_size]
-        embedding_batches.append(feature_extractor.extract_batch(image_batch))
+        clip_embeddings = feature_extractor.extract_batch(image_batch)
+        frequency_feature_arrays = [
+            extract_frequency_features(image) for image in image_batch
+        ]
+        frequency_embeddings = torch.from_numpy(
+            np.stack(frequency_feature_arrays)
+        ).to(dtype=clip_embeddings.dtype)
+        embedding_batches.append(
+            torch.cat((clip_embeddings, frequency_embeddings), dim=1)
+        )
 
     return torch.cat(embedding_batches, dim=0).numpy()
 
