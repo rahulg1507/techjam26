@@ -8,7 +8,6 @@ import numpy as np
 from sklearn.metrics import accuracy_score
 
 from blur_detector import estimate_blur_score
-from evaluate import load_labeled_images
 from features import ClipFeatureExtractor
 from frequency_features import extract_frequency_features
 
@@ -114,6 +113,8 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> None:
     """Load a tuning sample and print the best adaptive blur threshold."""
+    from evaluate import load_labeled_images
+
     arguments = parse_arguments()
     if arguments.max_per_class < 1:
         raise ValueError("max_per_class must be at least 1")
