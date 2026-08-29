@@ -11,6 +11,7 @@ from PIL import Image
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from tqdm import tqdm
 
+from adaptive_predict import adaptive_predict
 from features import ClipFeatureExtractor
 from frequency_features import extract_frequency_features
 from transforms import TRANSFORMS
@@ -26,6 +27,9 @@ DEFAULT_REPORT_PATH = "reports/robustness_table.md"
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_RANDOM_SEED = 42
 DEFAULT_USE_FREQUENCY_FEATURES = True
+DEFAULT_MODE = "fused"
+DEFAULT_BLUR_THRESHOLD = 1197.3215
+DEFAULT_PREDICTION_THRESHOLD = 0.5
 METRIC_ZERO_DIVISION_VALUE = 0
 
 
@@ -133,12 +137,35 @@ def evaluate_condition(
     classifier,
     feature_extractor: ClipFeatureExtractor,
     use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
+    mode: str = DEFAULT_MODE,
+    clip_only_classifier=None,
+    fused_classifier=None,
+    blur_threshold: float = DEFAULT_BLUR_THRESHOLD,
 ) -> dict[str, float]:
     """Extract features and score one clean or transformed image condition."""
+    if mode == "adaptive":
+        predictions = [
+            int(
+                adaptive_predict(
+                    image,
+                    clip_only_classifier,
+                    fused_classifier,
+                    feature_extractor,
+                    blur_threshold,
+                )
+                >= DEFAULT_PREDICTION_THRESHOLD
+            )
+            for image in condition_images
+        ]
+        return calculate_metrics(labels, predictions)
+
+    use_frequency_for_condition = (
+        use_frequency_features and mode == DEFAULT_MODE
+    )
     embeddings = extract_embeddings(
         condition_images,
         feature_extractor,
-        use_frequency_features=use_frequency_features,
+        use_frequency_features=use_frequency_for_condition,
     )
     predictions = classifier.predict(embeddings)
     return calculate_metrics(labels, predictions)
@@ -185,10 +212,25 @@ def evaluate_dataset(
     report_path: str = DEFAULT_REPORT_PATH,
     max_per_class: int | None = None,
     use_frequency_features: bool = DEFAULT_USE_FREQUENCY_FEATURES,
+    mode: str = DEFAULT_MODE,
+    clip_only_classifier_path: str | None = None,
+    fused_classifier_path: str | None = None,
+    blur_threshold: float = DEFAULT_BLUR_THRESHOLD,
 ) -> dict[str, dict[str, float]]:
     """Evaluate clean images and every registered transform, then save the report."""
     images, labels = load_labeled_images(data_directory, max_per_class)
-    classifier = load_classifier(classifier_path)
+    classifier = None
+    clip_only_classifier = None
+    fused_classifier = None
+    if mode == "adaptive":
+        if clip_only_classifier_path is None or fused_classifier_path is None:
+            raise ValueError(
+                "adaptive mode requires both clip-only and fused classifier paths"
+            )
+        clip_only_classifier = load_classifier(clip_only_classifier_path)
+        fused_classifier = load_classifier(fused_classifier_path)
+    else:
+        classifier = load_classifier(classifier_path)
     feature_extractor = ClipFeatureExtractor()
     metrics_by_condition = {}
 
@@ -198,6 +240,10 @@ def evaluate_dataset(
         classifier,
         feature_extractor,
         use_frequency_features=use_frequency_features,
+        mode=mode,
+        clip_only_classifier=clip_only_classifier,
+        fused_classifier=fused_classifier,
+        blur_threshold=blur_threshold,
     )
     metrics_by_condition["Clean"] = clean_metrics
     print_metrics("Clean", clean_metrics)
@@ -212,6 +258,10 @@ def evaluate_dataset(
             classifier,
             feature_extractor,
             use_frequency_features=use_frequency_features,
+            mode=mode,
+            clip_only_classifier=clip_only_classifier,
+            fused_classifier=fused_classifier,
+            blur_threshold=blur_threshold,
         )
         metrics_by_condition[transform_name] = transform_metrics
         print_metrics(transform_name, transform_metrics)
@@ -242,6 +292,28 @@ def parse_arguments() -> argparse.Namespace:
         help="Maximum number of images to sample from each class",
     )
     parser.add_argument(
+        "--mode",
+        choices=["clip_only", "fused", "adaptive"],
+        default=DEFAULT_MODE,
+        help="Feature and prediction mode",
+    )
+    parser.add_argument(
+        "--blur_threshold",
+        type=float,
+        default=DEFAULT_BLUR_THRESHOLD,
+        help="Blur threshold used in adaptive mode",
+    )
+    parser.add_argument(
+        "--clip_only_classifier",
+        default=None,
+        help="Path to the CLIP-only classifier for adaptive mode",
+    )
+    parser.add_argument(
+        "--fused_classifier",
+        default=None,
+        help="Path to the fused classifier for adaptive mode",
+    )
+    parser.add_argument(
         "--use_frequency_features",
         action=argparse.BooleanOptionalAction,
         default=DEFAULT_USE_FREQUENCY_FEATURES,
@@ -259,6 +331,10 @@ def main() -> None:
         report_path=arguments.report_path,
         max_per_class=arguments.max_per_class,
         use_frequency_features=arguments.use_frequency_features,
+        mode=arguments.mode,
+        clip_only_classifier_path=arguments.clip_only_classifier,
+        fused_classifier_path=arguments.fused_classifier,
+        blur_threshold=arguments.blur_threshold,
     )
 
 
