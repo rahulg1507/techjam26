@@ -83,7 +83,22 @@ AI-generation signatures — see Limitations for discussion. Full results in
 reports/robustness_table_sidset.md.
 
 ## Limitations & Future Work
-_(fill in before submission)_
+
+- **Distribution shift over transform robustness:** Our adaptive model handles
+  post-processing transforms (JPEG, blur, resize, noise) well within-distribution,
+  but zero-shot cross-dataset evaluation on SID_Set revealed a sharp accuracy drop
+  (~90% to ~57%), indicating the classifier learned CIFAKE-specific patterns rather
+  than fully generalizable AI-generation signatures. Robustness to transforms and
+  robustness to distribution shift are distinct challenges.
+- **Resolution mismatch:** Our blur-detection threshold was tuned on CIFAKE's
+  native 32x32 images, which have inherently compressed blur-score ranges compared
+  to full-resolution datasets like SID_Set. Retuning per-dataset may be necessary.
+- **Small evaluation samples:** Due to compute/time constraints, cross-dataset
+  evaluation used a 1000-image-per-class sample rather than the full 210K-image
+  SID_Set training split.
+- **Future work:** domain adaptation or fine-tuning on a mix of datasets, testing
+  additional frequency-domain features less tied to resolution, and expanding
+  cross-dataset evaluation to WildFake.
 
 ## Demo Video
 _(YouTube link here)_
