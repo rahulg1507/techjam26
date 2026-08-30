@@ -58,6 +58,30 @@ python src/evaluate.py --data_dir data/cifake/test --mode adaptive --clip_only_c
 - WildFake (ModelScope) — https://modelscope.cn/datasets/hy2628982280/WildFake/summary
 - Validation only (not for training): COCO val2017 (real) + DALL·E Advanced (AIGC)
 
+## Results
+
+**In-distribution (CIFAKE test set):**
+
+| Mode                     | Clean Accuracy |
+| ------------------------ | -------------- |
+| CLIP-only                | 88.4%          |
+| Fused (CLIP + frequency) | 90.7%          |
+| Adaptive (blur-gated)    | 90.6%          |
+
+Adaptive mode matches or exceeds both baselines across most robustness transforms
+(JPEG compression, blur, resize, noise, color jitter, center crop), and specifically
+recovers CLIP-only's robustness on heavy blur/downsampling where naive fusion
+degrades sharply. Full results in reports/robustness_table_adaptive.md.
+
+**Cross-dataset generalization (zero-shot on SID_Set):**
+
+Accuracy dropped to ~57% when evaluating our CIFAKE-trained adaptive model on
+SID_Set (a higher-resolution, differently-sourced dataset), with the model
+skewing toward predicting "fake" (recall ~99%, precision ~54%). This indicates
+our classifier learned CIFAKE-specific patterns rather than fully generalizable
+AI-generation signatures — see Limitations for discussion. Full results in
+reports/robustness_table_sidset.md.
+
 ## Limitations & Future Work
 _(fill in before submission)_
 
