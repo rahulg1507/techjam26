@@ -12,25 +12,44 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from adaptive_predict import adaptive_predict
 from features import ClipFeatureExtractor
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 def load_classifier(path: str):
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    """Load a serialized classifier from disk."""
+    with Path(path).open("rb") as classifier_file:
+        return pickle.load(classifier_file)
 
 
-def main():
+def main() -> None:
+    """Score images with the blur-gated adaptive prediction pipeline."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", required=True, help="Directory of images to score")
     parser.add_argument("--output", required=True, help="Path to write predictions JSON")
-    parser.add_argument("--classifier", default="outputs/classifier.pkl")
+    parser.add_argument(
+        "--clip_only_classifier",
+        required=True,
+        help="Path to the CLIP-only pickled classifier",
+    )
+    parser.add_argument(
+        "--fused_classifier",
+        required=True,
+        help="Path to the fused-feature pickled classifier",
+    )
+    parser.add_argument(
+        "--blur_threshold",
+        type=float,
+        required=True,
+        help="Use CLIP-only prediction below this blur score",
+    )
     args = parser.parse_args()
 
     extractor = ClipFeatureExtractor()
-    clf = load_classifier(args.classifier)
+    clip_only_classifier = load_classifier(args.clip_only_classifier)
+    fused_classifier = load_classifier(args.fused_classifier)
 
     image_paths = [
         p for p in Path(args.input_dir).rglob("*") if p.suffix.lower() in IMAGE_EXTS
@@ -39,9 +58,14 @@ def main():
     results = []
     for path in tqdm(image_paths, desc="Scoring images"):
         try:
-            img = Image.open(path)
-            feat = extractor.extract(img).numpy().reshape(1, -1)
-            pred = float(clf.predict_proba(feat)[0, 1])  # P(AIGC)
+            with Image.open(path) as image:
+                pred = adaptive_predict(
+                    image,
+                    clip_only_classifier,
+                    fused_classifier,
+                    extractor,
+                    args.blur_threshold,
+                )
         except Exception as e:
             print(f"Warning: failed on {path}: {e}")
             pred = None
