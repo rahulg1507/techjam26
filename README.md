@@ -11,13 +11,13 @@ since frequency fusion improves clean accuracy but degrades under heavy blur or
 downsampling.
 
 ## Team
-| Name | Role | Contribution |
-|------|------|---------------|
-| TBD  | Data pipeline | |
-| TBD  | Model training | |
-| TBD  | Evaluation harness | |
-| TBD  | Error analysis / report | |
-| TBD  | Demo video / writeup | |
+| Name                         | Contribution                                                                                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rahul Ganesh                 | Data pipeline, model training, adaptive gating system, robustness and cross-dataset evaluation, error analysis, inference script, and documentation |
+| Gokul Sai Ramesh             | Demo video production                                                                                                                               |
+| Kumaresan Kugapryan          | Track selection and early project discussion                                                                                                        |
+| Ryan Priyank Sunjai Dhas     | Testing and feedback on early prototypes                                                                                                            |
+| Gowrinath Jayamani Kanagaraj | Project planning and coordination                                                                                                                   |
 
 ## Setup
 
