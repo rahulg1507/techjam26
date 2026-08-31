@@ -101,4 +101,4 @@ reports/robustness_table_sidset.md.
   cross-dataset evaluation to WildFake.
 
 ## Demo Video
-_(YouTube link here)_
+[https://youtu.be/lQfBDpBt76M](https://youtu.be/lQfBDpBt76M)
